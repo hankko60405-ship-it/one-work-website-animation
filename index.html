@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Onework Point Cloud City</title>
+  <style>
+    html, body { margin: 0; width: 100%; min-height: 100%; background: #fff; overflow: hidden; }
+  </style>
+</head>
+<body>
+<div id="onework-pointer-city-morph" aria-label="Interactive point-cloud city reconstruction">
+  <style>
+    #onework-pointer-city-morph {
+      position: relative;
+      width: 100%;
+      min-height: 720px;
+      overflow: hidden;
+      background: #ffffff;
+      cursor: ns-resize;
+      touch-action: none;
+    }
+    #onework-pointer-city-morph * { box-sizing: border-box; }
+    #onework-pointer-city-morph canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 720px;
+    }
+    @media (max-width: 720px) {
+      #onework-pointer-city-morph,
+      #onework-pointer-city-morph canvas { min-height: 620px; }
+    }
+  </style>
+
+  <canvas role="img" aria-label="Move the pointer downward to gather a floating point cloud into a three-dimensional digital city"></canvas>
+
+  <script>
+    (() => {
+      const root = document.getElementById('onework-pointer-city-morph');
+      const canvas = root.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      const settings = {
+        density: 1,
+        signal: '#51a8b2',
+        line: '#536970',
+        rings: 1,
+        motion: true
+      };
+
+      let width = 1;
+      let height = 1;
+      let dpr = 1;
+      let raf = 0;
+      let last = performance.now();
+      let progress = .32;
+      let targetProgress = .32;
+      let pointerX = 0;
+      let targetPointerX = 0;
+      let geometry = [];
+      let points = [];
+      let orbitals = [];
+
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const mix = (a, b, amount) => a + (b - a) * amount;
+      const smoothstep = value => {
+        const t = clamp(value, 0, 1);
+        return t * t * (3 - 2 * t);
+      };
+      const random = seed => {
+        const value = Math.sin(seed * 78.233 + 13.71) * 43758.5453123;
+        return value - Math.floor(value);
+      };
+      const hexToRgb = hex => {
+        const value = hex.replace('#', '');
+        const parsed = parseInt(value.length === 3 ? value.split('').map(c => c + c).join('') : value, 16);
+        return [(parsed >> 16) & 255, (parsed >> 8) & 255, parsed & 255];
+      };
+
+      function addLine(a, b, strength = 1, kind = 0) {
+        geometry.push({ a, b, strength, kind });
+      }
+
+      function addBox(cx, cy, w, d, h, floors, columns, crown = 0) {
+        const x0 = cx - w / 2;
+        const x1 = cx + w / 2;
+        const y0 = cy - d / 2;
+        const y1 = cy + d / 2;
+
+        for (let level = 0; level <= floors; level++) {
+          const z = h * level / floors;
+          const outer = level === 0 || level === floors ? 1 : .62;
+          addLine({x:x0,y:y0,z}, {x:x1,y:y0,z}, outer, 1);
+          addLine({x:x1,y:y0,z}, {x:x1,y:y1,z}, outer, 1);
+          addLine({x:x1,y:y1,z}, {x:x0,y:y1,z}, outer * .72, 1);
+          addLine({x:x0,y:y1,z}, {x:x0,y:y0,z}, outer * .72, 1);
+        }
+
+        for (let column = 0; column <= columns; column++) {
+          const t = column / columns;
+          const x = mix(x0, x1, t);
+          const y = mix(y0, y1, t);
+          addLine({x,y:y0,z:0}, {x,y:y0,z:h}, .92, 1);
+          addLine({x,y:y1,z:0}, {x,y:y1,z:h}, .46, 1);
+          addLine({x:x0,y,z:0}, {x:x0,y,z:h}, .48, 1);
+          addLine({x:x1,y,z:0}, {x:x1,y,z:h}, .78, 1);
+        }
+
+        for (let level = 0; level < floors; level += 2) {
+          const za = h * level / floors;
+          const zb = h * Math.min(level + 2, floors) / floors;
+          addLine({x:x0,y:y0,z:za}, {x:x1,y:y0,z:zb}, .28, 2);
+          addLine({x:x1,y:y0,z:za}, {x:x0,y:y0,z:zb}, .28, 2);
+        }
+
+        addLine({x:x0,y:y0,z:h}, {x:x1,y:y1,z:h}, .55, 2);
+        addLine({x:x1,y:y0,z:h}, {x:x0,y:y1,z:h}, .55, 2);
+
+        if (crown > 0) {
+          const cw = w * .6;
+          const cd = d * .6;
+          const z1 = h + crown;
+          addLine({x:cx-cw/2,y:cy-cd/2,z:h}, {x:cx-cw/2,y:cy-cd/2,z:z1}, .8, 1);
+          addLine({x:cx+cw/2,y:cy-cd/2,z:h}, {x:cx+cw/2,y:cy-cd/2,z:z1}, .8, 1);
+          addLine({x:cx+cw/2,y:cy+cd/2,z:h}, {x:cx+cw/2,y:cy+cd/2,z:z1}, .55, 1);
+          addLine({x:cx-cw/2,y:cy+cd/2,z:h}, {x:cx-cw/2,y:cy+cd/2,z:z1}, .55, 1);
+          addLine({x:cx-cw/2,y:cy-cd/2,z:z1}, {x:cx+cw/2,y:cy-cd/2,z:z1}, .8, 1);
+          addLine({x:cx+cw/2,y:cy-cd/2,z:z1}, {x:cx+cw/2,y:cy+cd/2,z:z1}, .7, 1);
+          addLine({x:cx+cw/2,y:cy+cd/2,z:z1}, {x:cx-cw/2,y:cy+cd/2,z:z1}, .55, 1);
+          addLine({x:cx-cw/2,y:cy+cd/2,z:z1}, {x:cx-cw/2,y:cy-cd/2,z:z1}, .55, 1);
+        }
+      }
+
+      function addGroundGrid() {
+        for (let x = -260; x <= 260; x += 26) {
+          addLine({x,y:-175,z:0}, {x,y:175,z:0}, x % 52 === 0 ? .42 : .18, 0);
+        }
+        for (let y = -175; y <= 175; y += 26) {
+          addLine({x:-260,y,z:0}, {x:260,y,z:0}, y % 52 === 0 ? .42 : .18, 0);
+        }
+        addLine({x:-285,y:-200,z:0}, {x:285,y:-200,z:0}, .8, 0);
+        addLine({x:285,y:-200,z:0}, {x:285,y:200,z:0}, .8, 0);
+        addLine({x:285,y:200,z:0}, {x:-285,y:200,z:0}, .6, 0);
+        addLine({x:-285,y:200,z:0}, {x:-285,y:-200,z:0}, .6, 0);
+      }
+
+      function buildScene() {
+        geometry = [];
+        addGroundGrid();
+        addBox(0, 10, 88, 76, 238, 20, 8, 34);
+        addBox(-112, 18, 72, 62, 142, 12, 6, 0);
+        addBox(108, 18, 76, 64, 116, 10, 6, 0);
+        addBox(-184, -74, 62, 58, 82, 7, 5, 0);
+        addBox(-75, -88, 92, 62, 64, 6, 7, 0);
+        addBox(70, -92, 104, 64, 54, 5, 8, 0);
+        addBox(184, -62, 66, 58, 90, 8, 5, 0);
+        addBox(-190, 104, 74, 56, 54, 5, 5, 0);
+        addBox(164, 105, 96, 60, 64, 6, 7, 0);
+
+        const pointDensity = Math.max(.55, settings.density);
+        points = [];
+        geometry.forEach((line, lineIndex) => {
+          const dx = line.b.x - line.a.x;
+          const dy = line.b.y - line.a.y;
+          const dz = line.b.z - line.a.z;
+          const length = Math.hypot(dx, dy, dz);
+          const samples = Math.max(2, Math.round(length / 18 * pointDensity));
+          for (let sample = 0; sample <= samples; sample++) {
+            const t = sample / samples;
+            const seed = lineIndex * 97 + sample * 17 + 1;
+            const angle = random(seed + 3) * Math.PI * 2;
+            const radius = 145 + random(seed + 7) * 365;
+            points.push({
+              x: mix(line.a.x, line.b.x, t),
+              y: mix(line.a.y, line.b.y, t),
+              z: mix(line.a.z, line.b.z, t),
+              cloudX: Math.cos(angle) * radius + (random(seed + 11) - .5) * 170,
+              cloudY: Math.sin(angle) * radius * .58 + (random(seed + 13) - .5) * 120,
+              cloudZ: (random(seed + 19) - .5) * 260,
+              drift: random(seed + 23) * Math.PI * 2,
+              size: .42 + random(seed + 29) * 1.22,
+              signal: random(seed + 31) > .91
+            });
+          }
+        });
+
+        const buildingVolumes = [
+          [0,10,88,76,238],[-112,18,72,62,142],[108,18,76,64,116],
+          [-184,-74,62,58,82],[-75,-88,92,62,64],[70,-92,104,64,54],
+          [184,-62,66,58,90],[-190,104,74,56,54],[164,105,96,60,64]
+        ];
+        const volumeCount = Math.round(390 * pointDensity);
+        for (let i = 0; i < volumeCount; i++) {
+          const box = buildingVolumes[i % buildingVolumes.length];
+          const seed = 9000 + i * 13;
+          const face = Math.floor(random(seed + 2) * 4);
+          let x = box[0] + (random(seed + 3) - .5) * box[2];
+          let y = box[1] + (random(seed + 5) - .5) * box[3];
+          if (face === 0) y = box[1] - box[3] / 2;
+          if (face === 1) y = box[1] + box[3] / 2;
+          if (face === 2) x = box[0] - box[2] / 2;
+          if (face === 3) x = box[0] + box[2] / 2;
+          const angle = random(seed + 7) * Math.PI * 2;
+          const radius = 170 + random(seed + 11) * 350;
+          points.push({
+            x, y, z: random(seed + 13) * box[4],
+            cloudX: Math.cos(angle) * radius + (random(seed + 17) - .5) * 170,
+            cloudY: Math.sin(angle) * radius * .58 + (random(seed + 19) - .5) * 130,
+            cloudZ: (random(seed + 23) - .5) * 250,
+            drift: random(seed + 29) * Math.PI * 2,
+            size: .42 + random(seed + 31) * 1.12,
+            signal: random(seed + 37) > .91
+          });
+        }
+
+        orbitals = Array.from({ length: Math.round(58 * pointDensity) }, (_, i) => ({
+          radius: 35 + random(i + 17001) * 245,
+          flatten: .18 + random(i + 17101) * .38,
+          rotation: -.45 + random(i + 17201) * .9,
+          phase: random(i + 17301) * Math.PI * 2,
+          speed: .06 + random(i + 17401) * .24,
+          offsetX: (random(i + 17501) - .5) * 110,
+          offsetY: (random(i + 17601) - .5) * 90,
+          alpha: .025 + random(i + 17701) * .075
+        }));
+      }
+
+      function project(point, yaw, tilt, scale, originX, originY) {
+        const cos = Math.cos(yaw);
+        const sin = Math.sin(yaw);
+        const rx = point.x * cos - point.y * sin;
+        const ry = point.x * sin + point.y * cos;
+        const depthScale = 1 + clamp(ry / 1300, -.1, .1);
+        return {
+          x: originX + rx * scale * depthScale,
+          y: originY + (ry * tilt - point.z) * scale * depthScale
+        };
+      }
+
+      function resize() {
+        const rect = root.getBoundingClientRect();
+        dpr = Math.min(2, window.devicePixelRatio || 1);
+        width = Math.max(1, rect.width);
+        height = Math.max(1, rect.height);
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function drawOrbitals(time, assembled, originX, originY, scale) {
+        const signal = hexToRgb(settings.signal);
+        ctx.save();
+        ctx.translate(originX, originY - 42 * scale);
+        orbitals.forEach((ring, index) => {
+          const pulse = Math.sin(time * .00032 * ring.speed + ring.phase);
+          const radius = ring.radius * scale * (1 + pulse * .035);
+          ctx.beginPath();
+          ctx.ellipse(
+            ring.offsetX * scale,
+            ring.offsetY * scale,
+            radius,
+            radius * ring.flatten,
+            ring.rotation + pointerX * .025,
+            0,
+            Math.PI * 2
+          );
+          const visibility = ring.alpha * settings.rings * (.45 + assembled * .55);
+          ctx.strokeStyle = `rgba(${signal[0]},${signal[1]},${signal[2]},${visibility})`;
+          ctx.lineWidth = index % 8 === 0 ? .8 : .55;
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
+
+      function draw(time) {
+        const delta = Math.min(32, time - last);
+        last = time;
+        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches || !settings.motion;
+        const response = reduced ? 1 : 1 - Math.pow(.001, delta / 1000);
+        progress += (targetProgress - progress) * response;
+        pointerX += (targetPointerX - pointerX) * response;
+
+        const assembled = smoothstep(progress);
+        const lineReveal = smoothstep((progress - .25) / .66);
+        const signal = hexToRgb(settings.signal);
+        const lineColor = hexToRgb(settings.line);
+        const scale = Math.min(width / 780, height / 640) * 1.02;
+        const originX = width * .5 + pointerX * 13;
+        const originY = height * .79;
+        const yaw = -.69 + pointerX * .075;
+        const tilt = .46;
+
+        ctx.clearRect(0, 0, width, height);
+        drawOrbitals(time, assembled, originX, originY, scale);
+
+        if (lineReveal > .01) {
+          geometry.forEach((line, index) => {
+            const a = project(line.a, yaw, tilt, scale, originX, originY);
+            const b = project(line.b, yaw, tilt, scale, originX, originY);
+            const flicker = reduced ? 1 : .9 + Math.sin(time * .001 + index * .31) * .1;
+            const baseAlpha = line.kind === 0 ? .11 : line.kind === 2 ? .12 : .18;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.strokeStyle = `rgba(${lineColor[0]},${lineColor[1]},${lineColor[2]},${baseAlpha * line.strength * lineReveal * flicker})`;
+            ctx.lineWidth = line.kind === 0 ? .48 : .62;
+            ctx.stroke();
+          });
+        }
+
+        const cloudScale = Math.min(width / 980, height / 700);
+        points.forEach((point, index) => {
+          const target = project(point, yaw, tilt, scale, originX, originY);
+          const phase = point.drift + time * .00022;
+          const ambient = reduced ? 0 : 10 + (1 - assembled) * 18;
+          const dispersedX = width * .5 + point.cloudX * cloudScale + Math.cos(phase) * ambient;
+          const dispersedY = height * .48 + (point.cloudY - point.cloudZ * .3) * cloudScale + Math.sin(phase * .83) * ambient;
+          const stagger = clamp((progress * 1.3 - (index % 17) / 90), 0, 1);
+          const localMorph = smoothstep(stagger);
+          const x = mix(dispersedX, target.x, localMorph);
+          const y = mix(dispersedY, target.y, localMorph);
+          const alpha = .16 + localMorph * .52;
+          const radius = point.size * (.72 + localMorph * .25);
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = point.signal
+            ? `rgba(${signal[0]},${signal[1]},${signal[2]},${.33 + localMorph * .54})`
+            : `rgba(${lineColor[0]},${lineColor[1]},${lineColor[2]},${alpha})`;
+          ctx.fill();
+        });
+
+        if (progress > .17) {
+          const sweep = reduced ? progress : (time * .000075 + progress * .8) % 1;
+          const scanY = height * (.15 + sweep * .72);
+          const gradient = ctx.createLinearGradient(width * .12, 0, width * .88, 0);
+          gradient.addColorStop(0, `rgba(${signal[0]},${signal[1]},${signal[2]},0)`);
+          gradient.addColorStop(.48, `rgba(${signal[0]},${signal[1]},${signal[2]},${.08 + assembled * .17})`);
+          gradient.addColorStop(1, `rgba(${signal[0]},${signal[1]},${signal[2]},0)`);
+          ctx.beginPath();
+          ctx.moveTo(width * .12, scanY);
+          ctx.lineTo(width * .88, scanY);
+          ctx.strokeStyle = gradient;
+          ctx.lineWidth = .75;
+          ctx.stroke();
+        }
+
+        raf = requestAnimationFrame(draw);
+      }
+
+      function updateFromPointer(event) {
+        const rect = root.getBoundingClientRect();
+        targetProgress = clamp((event.clientY - rect.top) / rect.height, 0, 1);
+        targetPointerX = clamp(((event.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
+      }
+
+      root.addEventListener('pointermove', updateFromPointer);
+      root.addEventListener('pointerdown', event => {
+        root.setPointerCapture?.(event.pointerId);
+        updateFromPointer(event);
+      });
+      root.addEventListener('wheel', event => {
+        targetProgress = clamp(targetProgress + event.deltaY * .0007, 0, 1);
+      }, { passive: true });
+
+      new ResizeObserver(resize).observe(root);
+      buildScene();
+      resize();
+      raf = requestAnimationFrame(draw);
+
+      function applySettings() {
+        buildScene();
+      }
+
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: applySettings });
+        tweak.addSlider(settings, 'density', { label: 'Point density', min: .55, max: 1.55, step: .05, reference: 'scan.density' });
+        tweak.addSlider(settings, 'rings', { label: 'Orbital traces', min: 0, max: 1.8, step: .05, reference: 'scan.rings' });
+        tweak.addColorPicker(settings, 'signal', { label: 'Signal', reference: 'scan.signal' });
+        tweak.addColorPicker(settings, 'line', { label: 'Structure', reference: 'scan.structure' });
+        tweak.addToggle(settings, 'motion', { label: 'Ambient motion', reference: 'scan.motion' });
+      }
+    })();
+  </script>
+</div>
+</body>
+</html>
